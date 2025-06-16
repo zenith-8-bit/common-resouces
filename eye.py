@@ -67,7 +67,7 @@ PUPIL_SIZE = 10
 HIGHLIGHT_SIZE = 3
 SECONDARY_HIGHLIGHT_SIZE = 1
 
-# Eyelash parameters (fixed the variable name from EYE_EYELASH_LENGTH to EYELASH_LENGTH)
+# Eyelash parameters
 NUM_EYELASHES = 5
 EYELASH_LENGTH = 7
 EYELASH_THICKNESS = 1
@@ -88,7 +88,7 @@ def draw_hunter_eye(draw, center_x_eye, center_y_eye, pupil_x_offset=0, pupil_y_
         draw.arc((eye_bbox[0], eye_bbox[3] - EYE_HEIGHT // 2, eye_bbox[2], eye_bbox[3]),
                  start=0, end=180, fill="white", width=1)
 
-    # Draw eyelashes (fixed the variable name here)
+    # Draw eyelashes
     for i, angle in enumerate(EYELASH_ANGLES):
         lx = center_x_eye + (EYE_WIDTH * np.cos(angle * 1.05 - np.pi/2))
         ly = (center_y_eye - EYE_HEIGHT + eyelid_y_offset) + (EYE_HEIGHT * 0.2 * (1 - np.sin(angle - np.pi/2)))
@@ -148,16 +148,173 @@ def draw_hunter_eye(draw, center_x_eye, center_y_eye, pupil_x_offset=0, pupil_y_
         fill="black"
     )
 
-# [Rest of your functions remain unchanged...]
-# animate_happy(), animate_joy(), draw_closed_eye(), animate_eyes_main_loop() 
-# all stay exactly the same as in your original code
+def draw_closed_eye(draw, center_x_eye, center_y_eye):
+    """Draws a closed eye as a simple horizontal line with slight curve."""
+    draw.arc(
+        (center_x_eye - EYE_WIDTH, center_y_eye - EYE_HEIGHT // 4,
+         center_x_eye + EYE_WIDTH, center_y_eye + EYE_HEIGHT // 4),
+        start=180, end=360, fill="white", width=2
+    )
+
+def animate_happy():
+    """Animates a happy expression: eye squints slightly, pupil moves up."""
+    steps = 5
+    for i in range(steps):
+        with canvas(device) as draw:
+            eyelid_offset = int(EYE_HEIGHT * 0.08 * (i / steps))
+            pupil_offset_y = int(-PUPIL_SIZE * 0.4 * (i / steps))
+            draw_hunter_eye(draw, center_x, center_y,
+                          pupil_y_offset=pupil_offset_y,
+                          eyelid_y_offset=eyelid_offset,
+                          is_happy_squint=True, highlight_pos='top_left')
+        time.sleep(0.08)
+
+    with canvas(device) as draw:
+        draw_hunter_eye(draw, center_x, center_y, pupil_y_offset=int(-PUPIL_SIZE * 0.4),
+                      eyelid_y_offset=int(EYE_HEIGHT * 0.08), is_happy_squint=True, highlight_pos='top_left')
+    time.sleep(np.random.uniform(1.0, 2.0))
+
+    for i in range(steps - 1, -1, -1):
+        with canvas(device) as draw:
+            eyelid_offset = int(EYE_HEIGHT * 0.08 * (i / steps))
+            pupil_offset_y = int(-PUPIL_SIZE * 0.4 * (i / steps))
+            draw_hunter_eye(draw, center_x, center_y,
+                          pupil_y_offset=pupil_offset_y,
+                          eyelid_y_offset=eyelid_offset,
+                          is_happy_squint=True, highlight_pos='top_left')
+        time.sleep(0.08)
+    time.sleep(0.3)
+
+def animate_joy():
+    """Animates a joyful expression: more exaggerated squint, rapid pupil movement, and highlight flicker."""
+    steps = 7
+    for i in range(steps):
+        with canvas(device) as draw:
+            eyelid_offset = int(EYE_HEIGHT * 0.15 * (i / steps))
+            pupil_offset_y = int(-PUPIL_SIZE * 0.6 * (i / steps))
+            current_highlight_pos = random.choice(['top_left', 'top_right', 'bottom_left', 'bottom_right'])
+            draw_hunter_eye(draw, center_x, center_y,
+                          pupil_y_offset=pupil_offset_y,
+                          eyelid_y_offset=eyelid_offset,
+                          is_happy_squint=True, highlight_pos=current_highlight_pos)
+        time.sleep(0.05)
+
+    hold_duration = np.random.uniform(1.0, 2.0)
+    start_time = time.time()
+    while time.time() - start_time < hold_duration:
+        with canvas(device) as draw:
+            pupil_jitter_x = random.randint(-1, 1)
+            pupil_jitter_y = random.randint(-1, 1)
+            current_highlight_pos = random.choice(['top_left', 'top_right', 'bottom_left', 'bottom_right'])
+            draw_hunter_eye(draw, center_x, center_y,
+                          pupil_y_offset=int(-PUPIL_SIZE * 0.6) + pupil_jitter_y,
+                          pupil_x_offset=pupil_jitter_x,
+                          eyelid_y_offset=int(EYE_HEIGHT * 0.15),
+                          is_happy_squint=True, highlight_pos=current_highlight_pos)
+        time.sleep(0.07)
+
+    for i in range(steps - 1, -1, -1):
+        with canvas(device) as draw:
+            eyelid_offset = int(EYE_HEIGHT * 0.15 * (i / steps))
+            pupil_offset_y = int(-PUPIL_SIZE * 0.6 * (i / steps))
+            draw_hunter_eye(draw, center_x, center_y,
+                          pupil_y_offset=pupil_offset_y,
+                          eyelid_y_offset=eyelid_offset,
+                          is_happy_squint=True, highlight_pos='top_left')
+        time.sleep(0.05)
+    time.sleep(0.3)
+
+def animate_eyes_main_loop():
+    """Main animation loop that cycles through various eye movements and emotional states."""
+    eye_states = [
+        'normal_straight', 'normal_left', 'normal_right', 'normal_up', 'normal_down',
+        'blink', 'happy', 'joy', 'sad', 'surprised', 'wink', 'sleepy'
+    ]
+
+    while True:
+        state = random.choice(eye_states)
+        highlight_choice = random.choice(['top_left', 'top_right', 'bottom_left', 'bottom_right', 'center'])
+
+        if state == 'happy':
+            animate_happy()
+        elif state == 'joy':
+            animate_joy()
+        elif state == 'blink':
+            for _ in range(1):
+                with canvas(device) as draw_blink:
+                    draw_closed_eye(draw_blink, center_x, center_y)
+                time.sleep(0.1)
+                with canvas(device) as draw_open:
+                    draw_hunter_eye(draw_open, center_x, center_y, highlight_pos=highlight_choice)
+                time.sleep(0.1)
+            time.sleep(np.random.uniform(0.5, 1.0))
+        else:
+            with canvas(device) as draw:
+                if state == 'normal_straight':
+                    draw_hunter_eye(draw, center_x, center_y, highlight_pos=highlight_choice)
+                    time.sleep(np.random.uniform(1.0, 3.0))
+                elif state == 'normal_left':
+                    draw_hunter_eye(draw, center_x, center_y, pupil_x_offset=-PUPIL_SIZE, highlight_pos=highlight_choice)
+                    time.sleep(np.random.uniform(0.5, 1.5))
+                elif state == 'normal_right':
+                    draw_hunter_eye(draw, center_x, center_y, pupil_x_offset=PUPIL_SIZE, highlight_pos=highlight_choice)
+                    time.sleep(np.random.uniform(0.5, 1.5))
+                elif state == 'normal_up':
+                    draw_hunter_eye(draw, center_x, center_y, pupil_y_offset=-PUPIL_SIZE, highlight_pos=highlight_choice)
+                    time.sleep(np.random.uniform(0.5, 1.5))
+                elif state == 'normal_down':
+                    draw_hunter_eye(draw, center_x, center_y, pupil_y_offset=PUPIL_SIZE, highlight_pos=highlight_choice)
+                    time.sleep(np.random.uniform(0.5, 1.5))
+                elif state == 'sad':
+                    draw_hunter_eye(draw, center_x, center_y, pupil_y_offset=PUPIL_SIZE // 2, highlight_pos='center')
+                    time.sleep(np.random.uniform(1.0, 2.5))
+                elif state == 'surprised':
+                    temp_eye_height = EYE_HEIGHT + 10
+                    temp_pupil_size = PUPIL_SIZE // 2
+                    draw.ellipse(
+                        (center_x - EYE_WIDTH, center_y - temp_eye_height,
+                         center_x + EYE_WIDTH, center_y + temp_eye_height),
+                        outline="white", fill="black"
+                    )
+                    draw.ellipse(
+                        (center_x - temp_pupil_size, center_y - temp_pupil_size,
+                         center_x + temp_pupil_size, center_y + temp_pupil_size),
+                        outline="white", fill="white"
+                    )
+                    draw.ellipse(
+                        (center_x - HIGHLIGHT_SIZE//2, center_y - HIGHLIGHT_SIZE//2,
+                         center_x + HIGHLIGHT_SIZE//2, center_y + HIGHLIGHT_SIZE//2),
+                        fill="black"
+                    )
+                    time.sleep(np.random.uniform(0.7, 1.5))
+                    with canvas(device) as draw_norm:
+                        draw_hunter_eye(draw_norm, center_x, center_y, highlight_pos=highlight_choice)
+                    time.sleep(0.5)
+                elif state == 'wink':
+                    draw_closed_eye(draw, center_x, center_y)
+                    time.sleep(0.3)
+                    with canvas(device) as draw_open:
+                        draw_hunter_eye(draw_open, center_x, center_y, highlight_pos=highlight_choice)
+                    time.sleep(0.3)
+                elif state == 'sleepy':
+                    draw.ellipse(
+                        (center_x - EYE_WIDTH, center_y - EYE_HEIGHT // 3,
+                         center_x + EYE_WIDTH, center_y + EYE_HEIGHT // 3),
+                        outline="white", fill="black"
+                    )
+                    draw.ellipse(
+                        (center_x - PUPIL_SIZE // 2, center_y + PUPIL_SIZE // 2,
+                         center_x + PUPIL_SIZE // 2, center_y + PUPIL_SIZE + HIGHLIGHT_SIZE),
+                        outline="white", fill="white"
+                    )
+                    time.sleep(np.random.uniform(1.5, 3.0))
 
 # --- Main execution block ---
 try:
     if 'device' in locals() and device:
         device.clear()
         print("Starting single hunter anime eye animation...")
-        animate_eyes_main_loop()
+        animate_eyes_main_loop()  # Fixed the function name here
 
 except KeyboardInterrupt:
     print("\nKeyboardInterrupt detected.")
