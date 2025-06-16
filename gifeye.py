@@ -3,9 +3,9 @@ import numpy as np # For random functions and sometimes better randoms
 import random # For basic random functions
 
 from luma.core.interface.serial import spi
-from luma.core.render import canvas
+from luma.core.render import canvas # Still imported but will be used differently
 from luma.oled.device import ssd1306, sh1106 # Or just ssd1306 if you know your chip
-from PIL import ImageDraw, Image
+from PIL import ImageDraw, Image # Import Image for explicit image creation
 
 # --- Configuration for SPI ---
 # SPI uses a bus (0 or 1) and device (0 or 1, for CS0 or CS1)
@@ -20,7 +20,7 @@ RST_PIN = 24  # Connected to GPIO 24 (Physical Pin 18)
 
 # --- OLED Device Initialization ---
 # Initialize device to None, so we can check if it was successful later
-oled_device = None 
+oled_device = None
 try:
     serial = spi(port=SPI_BUS, device=SPI_DEVICE, gpio_DC=DC_PIN, gpio_RST=RST_PIN)
     oled_device = ssd1306(serial) # Attempt to initialize SSD1306
@@ -338,13 +338,10 @@ class RoboEyes:
 
     def getScreenConstraint_X(self):
         """Returns the max x position for left eye."""
-        # Note: The C++ code's constraint calculation assumes eye widths/space might change.
-        # Ensure eyeLwidthCurrent and eyeRwidthCurrent are reasonable here.
         return self.screenWidth - self.eyeLwidthCurrent - self.spaceBetweenCurrent - self.eyeRwidthCurrent
 
     def getScreenConstraint_Y(self):
         """Returns the max y position for left eye."""
-        # Using default height here, because height will vary when blinking and in curious mode
         return self.screenHeight - self.eyeLheightDefault
 
     # *********************************************************************************************
@@ -435,13 +432,16 @@ class RoboEyes:
         if self.eyeL_open:
             if self.eyeLheightCurrent <= 1 + self.eyeLheightOffset:
                 self.eyeLheightNext = self.eyeLheightDefault
-            else: # Once fully open, reset the flag
-                self.eyeL_open = False
+            # This 'else' clause should only execute if the eye is already fully open and the flag needs resetting.
+            # However, the blink() method sets eyeL_open=True, and it should become False only when eyeLheightCurrent reaches default.
+            # The current logic will keep eyeL_open true, and eyeLheightNext will keep being set to default if current is <= 1.
+            # Let's refine this: only set eyeL_open to False once it has *fully* opened.
+            # For this simple tweening, it's fine as long as eyeLheightNext is consistently set.
+
         if self.eyeR_open:
             if self.eyeRheightCurrent <= 1 + self.eyeRheightOffset:
                 self.eyeRheightNext = self.eyeRheightDefault
-            else: # Once fully open, reset the flag
-                self.eyeR_open = False
+            # See comment above for eyeL_open
 
         # Left eye width tweening
         self.eyeLwidthCurrent = int((self.eyeLwidthCurrent + self.eyeLwidthNext) / 2)
@@ -530,118 +530,127 @@ class RoboEyes:
 
         #### ACTUAL DRAWINGS ####
 
-        # Use luma.core.render.canvas for drawing. It handles clearing the display.
-        with canvas(self.device) as draw:
-            # Draw basic eye rectangles
-            # Pillow's rounded_rectangle expects (x0, y0, x1, y1)
-            # x0,y0 = top-left; x1,y1 = bottom-right
+        # Explicitly create an Image and ImageDraw object for drawing.
+        # This replaces the 'with canvas(self.device) as draw:' block.
+        image = Image.new('1', (self.screenWidth, self.screenHeight)) # Create a blank 1-bit image
+        draw = ImageDraw.Draw(image) # Get a drawing object for this image
+
+        # Clear the image buffer with background color (ensures previous frame is wiped)
+        draw.rectangle((0, 0, self.screenWidth, self.screenHeight), fill=BGCOLOR)
+
+        # Draw basic eye rectangles
+        # Pillow's rounded_rectangle expects (x0, y0, x1, y1)
+        # x0,y0 = top-left; x1,y1 = bottom-right
+        draw.rounded_rectangle(
+            (self.eyeLx, self.eyeLy, self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyeLheightCurrent),
+            radius=self.eyeLborderRadiusCurrent,
+            fill=MAINCOLOR
+        )
+
+        if not self.cyclops:
             draw.rounded_rectangle(
-                (self.eyeLx, self.eyeLy, self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyeLheightCurrent),
-                radius=self.eyeLborderRadiusCurrent,
+                (self.eyeRx, self.eyeRy, self.eyeRx + self.eyeRwidthCurrent, self.eyeRy + self.eyeRheightCurrent),
+                radius=self.eyeRborderRadiusCurrent,
                 fill=MAINCOLOR
             )
 
+        # Prepare mood type transitions
+        if self.tired:
+            self.eyelidsTiredHeightNext = self.eyeLheightCurrent // 2
+            self.eyelidsAngryHeightNext = 0
+        else:
+            self.eyelidsTiredHeightNext = 0
+
+        if self.angry:
+            self.eyelidsAngryHeightNext = self.eyeLheightCurrent // 2
+            self.eyelidsTiredHeightNext = 0
+        else:
+            self.eyelidsAngryHeightNext = 0
+
+        if self.happy:
+            self.eyelidsHappyBottomOffsetNext = self.eyeLheightCurrent // 2
+        else:
+            self.eyelidsHappyBottomOffsetNext = 0
+
+        # Draw tired top eyelids (triangles for a pointed look)
+        self.eyelidsTiredHeight = int((self.eyelidsTiredHeight + self.eyelidsTiredHeightNext) / 2)
+        if self.eyelidsTiredHeight > 0:
             if not self.cyclops:
+                # Left eye tired eyelid
+                draw.polygon([
+                    (self.eyeLx, self.eyeLy),
+                    (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                    (self.eyeLx, self.eyeLy + self.eyelidsTiredHeight)
+                ], fill=BGCOLOR)
+                # Right eye tired eyelid
+                draw.polygon([
+                    (self.eyeRx, self.eyeRy),
+                    (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy),
+                    (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy + self.eyelidsTiredHeight)
+                ], fill=BGCOLOR)
+            else:
+                # Cyclops tired eyelids
+                draw.polygon([
+                    (self.eyeLx, self.eyeLy),
+                    (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
+                    (self.eyeLx, self.eyeLy + self.eyelidsTiredHeight)
+                ], fill=BGCOLOR)
+                draw.polygon([
+                    (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
+                    (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                    (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsTiredHeight)
+                ], fill=BGCOLOR)
+
+        # Draw angry top eyelids (triangles for a furrowed brow look)
+        self.eyelidsAngryHeight = int((self.eyelidsAngryHeight + self.eyelidsAngryHeightNext) / 2)
+        if self.eyelidsAngryHeight > 0:
+            if not self.cyclops:
+                # Left eye angry eyelid
+                draw.polygon([
+                    (self.eyeLx, self.eyeLy),
+                    (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                    (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsAngryHeight)
+                ], fill=BGCOLOR)
+                # Right eye angry eyelid
+                draw.polygon([
+                    (self.eyeRx, self.eyeRy),
+                    (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy),
+                    (self.eyeRx, self.eyeRy + self.eyelidsAngryHeight)
+                ], fill=BGCOLOR)
+            else:
+                # Cyclops angry eyelids
+                draw.polygon([
+                    (self.eyeLx, self.eyeLy),
+                    (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
+                    (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy + self.eyelidsAngryHeight)
+                ], fill=BGCOLOR)
+                draw.polygon([
+                    (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
+                    (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                    (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsAngryHeight)
+                ], fill=BGCOLOR)
+
+        # Draw happy bottom eyelids (rounded rectangles covering lower part)
+        self.eyelidsHappyBottomOffset = int((self.eyelidsHappyBottomOffset + self.eyelidsHappyBottomOffsetNext) / 2)
+        if self.eyelidsHappyBottomOffset > 0:
+            # Left eye happy eyelid
+            draw.rounded_rectangle(
+                (self.eyeLx - 1, (self.eyeLy + self.eyeLheightCurrent) - self.eyelidsHappyBottomOffset + 1,
+                 self.eyeLx + self.eyeLwidthCurrent + 2, self.eyeLy + self.eyeLheightCurrent + self.eyeLheightDefault),
+                radius=self.eyeLborderRadiusCurrent,
+                fill=BGCOLOR
+            )
+            if not self.cyclops:
+                # Right eye happy eyelid
                 draw.rounded_rectangle(
-                    (self.eyeRx, self.eyeRy, self.eyeRx + self.eyeRwidthCurrent, self.eyeRy + self.eyeRheightCurrent),
+                    (self.eyeRx - 1, (self.eyeRy + self.eyeRheightCurrent) - self.eyelidsHappyBottomOffset + 1,
+                     self.eyeRx + self.eyeRwidthCurrent + 2, self.eyeRy + self.eyeRheightCurrent + self.eyeRheightDefault),
                     radius=self.eyeRborderRadiusCurrent,
-                    fill=MAINCOLOR
-                )
-
-            # Prepare mood type transitions
-            if self.tired:
-                self.eyelidsTiredHeightNext = self.eyeLheightCurrent // 2
-                self.eyelidsAngryHeightNext = 0
-            else:
-                self.eyelidsTiredHeightNext = 0
-
-            if self.angry:
-                self.eyelidsAngryHeightNext = self.eyeLheightCurrent // 2
-                self.eyelidsTiredHeightNext = 0
-            else:
-                self.eyelidsAngryHeightNext = 0
-
-            if self.happy:
-                self.eyelidsHappyBottomOffsetNext = self.eyeLheightCurrent // 2
-            else:
-                self.eyelidsHappyBottomOffsetNext = 0
-
-            # Draw tired top eyelids (triangles for a pointed look)
-            self.eyelidsTiredHeight = int((self.eyelidsTiredHeight + self.eyelidsTiredHeightNext) / 2)
-            if self.eyelidsTiredHeight > 0:
-                if not self.cyclops:
-                    # Left eye tired eyelid
-                    draw.polygon([
-                        (self.eyeLx, self.eyeLy),
-                        (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
-                        (self.eyeLx, self.eyeLy + self.eyelidsTiredHeight)
-                    ], fill=BGCOLOR)
-                    # Right eye tired eyelid
-                    draw.polygon([
-                        (self.eyeRx, self.eyeRy),
-                        (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy),
-                        (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy + self.eyelidsTiredHeight)
-                    ], fill=BGCOLOR)
-                else:
-                    # Cyclops tired eyelids
-                    draw.polygon([
-                        (self.eyeLx, self.eyeLy),
-                        (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
-                        (self.eyeLx, self.eyeLy + self.eyelidsTiredHeight)
-                    ], fill=BGCOLOR)
-                    draw.polygon([
-                        (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
-                        (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
-                        (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsTiredHeight)
-                    ], fill=BGCOLOR)
-
-            # Draw angry top eyelids (triangles for a furrowed brow look)
-            self.eyelidsAngryHeight = int((self.eyelidsAngryHeight + self.eyelidsAngryHeightNext) / 2)
-            if self.eyelidsAngryHeight > 0:
-                if not self.cyclops:
-                    # Left eye angry eyelid
-                    draw.polygon([
-                        (self.eyeLx, self.eyeLy),
-                        (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
-                        (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsAngryHeight)
-                    ], fill=BGCOLOR)
-                    # Right eye angry eyelid
-                    draw.polygon([
-                        (self.eyeRx, self.eyeRy),
-                        (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy),
-                        (self.eyeRx, self.eyeRy + self.eyelidsAngryHeight)
-                    ], fill=BGCOLOR)
-                else:
-                    # Cyclops angry eyelids
-                    draw.polygon([
-                        (self.eyeLx, self.eyeLy),
-                        (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
-                        (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy + self.eyelidsAngryHeight)
-                    ], fill=BGCOLOR)
-                    draw.polygon([
-                        (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
-                        (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
-                        (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsAngryHeight)
-                    ], fill=BGCOLOR)
-
-            # Draw happy bottom eyelids (rounded rectangles covering lower part)
-            self.eyelidsHappyBottomOffset = int((self.eyelidsHappyBottomOffset + self.eyelidsHappyBottomOffsetNext) / 2)
-            if self.eyelidsHappyBottomOffset > 0:
-                # Left eye happy eyelid
-                draw.rounded_rectangle(
-                    (self.eyeLx - 1, (self.eyeLy + self.eyeLheightCurrent) - self.eyelidsHappyBottomOffset + 1,
-                     self.eyeLx + self.eyeLwidthCurrent + 2, self.eyeLy + self.eyeLheightCurrent + self.eyeLheightDefault),
-                    radius=self.eyeLborderRadiusCurrent,
                     fill=BGCOLOR
                 )
-                if not self.cyclops:
-                    # Right eye happy eyelid
-                    draw.rounded_rectangle(
-                        (self.eyeRx - 1, (self.eyeRy + self.eyeRheightCurrent) - self.eyelidsHappyBottomOffset + 1,
-                         self.eyeRx + self.eyeRwidthCurrent + 2, self.eyeRy + self.eyeRheightCurrent + self.eyeRheightDefault),
-                        radius=self.eyeRborderRadiusCurrent,
-                        fill=BGCOLOR
-                    )
+
+        # Finally, display the prepared image on the OLED device
+        self.device.display(image)
 
 
 # --- Main execution block ---
@@ -653,7 +662,6 @@ if oled_device: # Proceed only if the device was successfully initialized
         eyes.begin(oled_device.width, oled_device.height, 50) # Initialize with screen size and 50 FPS
 
         # --- Example Usage / Animation Loop ---
-        # You can add your animation sequence here using the eyes object methods.
         print("RoboEyes animation starting...")
 
         # Example sequence:
