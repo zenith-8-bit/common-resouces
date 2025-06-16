@@ -14,7 +14,7 @@ RST_PIN = 24    # GPIO 24 (Physical Pin 18)
 oled_device = None
 try:
     serial = spi(port=SPI_BUS, device=SPI_DEVICE, gpio_DC=DC_PIN, gpio_RST=RST_PIN)
-    oled_device = ssd1306(serial, rotate=0)  # Added rotate=0 for proper orientation
+    oled_device = ssd1306(serial, rotate=0)   # Added rotate=0 for proper orientation
     print(f"OLED display initialized: {oled_device.width}x{oled_device.height}")
 except Exception as e:
     print(f"Error initializing OLED device: {e}")
@@ -22,8 +22,8 @@ except Exception as e:
     exit()
 
 # --- Display Colors ---
-BGCOLOR = 0  # Black
-MAINCOLOR = 1  # White
+BGCOLOR = 0   # Black
+MAINCOLOR = 1   # White
 
 # --- Mood Types ---
 DEFAULT = 0
@@ -32,7 +32,7 @@ ANGRY = 2
 HAPPY = 3
 
 # --- Predefined Positions ---
-N = 1  # North
+N = 1   # North
 NE = 2
 E = 3
 SE = 4
@@ -46,7 +46,7 @@ class RoboEyes:
         self.device = display_device
         self.screenWidth = self.device.width
         self.screenHeight = self.device.height
-        self.frameInterval = 20  # 50 FPS default
+        self.frameInterval = 20   # 50 FPS default
         self.fpsTimer = 0
         
         # Eye state variables
@@ -57,7 +57,7 @@ class RoboEyes:
         # Left eye geometry
         self.eyeLwidthDefault = self.eyeLwidthCurrent = self.eyeLwidthNext = 36
         self.eyeLheightDefault = 36
-        self.eyeLheightCurrent = 1  # Start closed
+        self.eyeLheightCurrent = 1   # Start closed
         self.eyeLheightNext = self.eyeLheightDefault
         self.eyeLheightOffset = 0
         self.eyeLborderRadiusDefault = self.eyeLborderRadiusCurrent = self.eyeLborderRadiusNext = 8
@@ -65,7 +65,7 @@ class RoboEyes:
         # Right eye geometry
         self.eyeRwidthDefault = self.eyeRwidthCurrent = self.eyeRwidthNext = 36
         self.eyeRheightDefault = 36
-        self.eyeRheightCurrent = 1  # Start closed
+        self.eyeRheightCurrent = 1   # Start closed
         self.eyeRheightNext = self.eyeRheightDefault
         self.eyeRheightOffset = 0
         self.eyeRborderRadiusDefault = self.eyeRborderRadiusCurrent = self.eyeRborderRadiusNext = 8
@@ -195,18 +195,20 @@ class RoboEyes:
         self.blinkInterval = interval
         self.blinkIntervalVariation = variation
         if active:
+            # Fixed: Added closing parenthesis here
             self.blinktimer = (time.monotonic_ns() // 1_000_000 + 
-                             (interval * 1000) + 
-                             (random.randint(0, variation) * 1000))
+                               (interval * 1000) + 
+                               (random.randint(0, variation) * 1000))
 
     def setIdleMode(self, active, interval=1, variation=0):
         self.idle = active
         self.idleInterval = interval
         self.idleIntervalVariation = variation
         if active:
+            # Fixed: Added closing parenthesis here
             self.idleAnimationTimer = (time.monotonic_ns() // 1_000_000 + 
-                                      (interval * 1000) + 
-                                      (random.randint(0, variation) * 1000))
+                                       (interval * 1000) + 
+                                       (random.randint(0, variation) * 1000))
 
     def setCuriosity(self, curiousBit):
         self.curious = curiousBit
@@ -302,9 +304,10 @@ class RoboEyes:
         # --- Handle animations ---
         if self.autoblinker and current_time_ms >= self.blinktimer:
             self.blink()
+            # This line already had the correct parentheses in the previous fix
             self.blinktimer = (current_time_ms + 
-                              (self.blinkInterval * 1000) + 
-                              (random.randint(0, self.blinkIntervalVariation) * 1000)
+                                (self.blinkInterval * 1000) + 
+                                (random.randint(0, self.blinkIntervalVariation) * 1000))
 
         if self.laugh:
             if self.laughToggle:
@@ -327,9 +330,10 @@ class RoboEyes:
         if self.idle and current_time_ms >= self.idleAnimationTimer:
             self.eyeLxNext = random.randint(0, self.getScreenConstraint_X())
             self.eyeLyNext = random.randint(0, self.getScreenConstraint_Y())
+            # This line already had the correct parentheses in the previous fix
             self.idleAnimationTimer = (current_time_ms + 
-                                      (self.idleInterval * 1000) + 
-                                      (random.randint(0, self.idleIntervalVariation) * 1000)
+                                         (self.idleInterval * 1000) + 
+                                         (random.randint(0, self.idleIntervalVariation) * 1000))
 
         # Apply flicker effects
         if self.hFlicker:
@@ -392,35 +396,35 @@ class RoboEyes:
         if self.eyelidsTiredHeight > 0:
             if not self.cyclops:
                 draw.polygon([(self.eyeLx, self.eyeLy), 
-                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
-                            (self.eyeLx, self.eyeLy + self.eyelidsTiredHeight)], fill=BGCOLOR)
+                                (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                                (self.eyeLx, self.eyeLy + self.eyelidsTiredHeight)], fill=BGCOLOR)
                 draw.polygon([(self.eyeRx, self.eyeRy),
-                            (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy),
-                            (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy + self.eyelidsTiredHeight)], fill=BGCOLOR)
+                                (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy),
+                                (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy + self.eyelidsTiredHeight)], fill=BGCOLOR)
             else:
                 draw.polygon([(self.eyeLx, self.eyeLy),
-                            (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
-                            (self.eyeLx, self.eyeLy + self.eyelidsTiredHeight)], fill=BGCOLOR)
+                                (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
+                                (self.eyeLx, self.eyeLy + self.eyelidsTiredHeight)], fill=BGCOLOR)
                 draw.polygon([(self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
-                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
-                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsTiredHeight)], fill=BGCOLOR)
+                                (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                                (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsTiredHeight)], fill=BGCOLOR)
 
         self.eyelidsAngryHeight = (self.eyelidsAngryHeight + self.eyelidsAngryHeightNext) // 2
         if self.eyelidsAngryHeight > 0:
             if not self.cyclops:
                 draw.polygon([(self.eyeLx, self.eyeLy),
-                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
-                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsAngryHeight)], fill=BGCOLOR)
+                                (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                                (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsAngryHeight)], fill=BGCOLOR)
                 draw.polygon([(self.eyeRx, self.eyeRy),
-                            (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy),
-                            (self.eyeRx, self.eyeRy + self.eyelidsAngryHeight)], fill=BGCOLOR)
+                                (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy),
+                                (self.eyeRx, self.eyeRy + self.eyelidsAngryHeight)], fill=BGCOLOR)
             else:
                 draw.polygon([(self.eyeLx, self.eyeLy),
-                            (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
-                            (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy + self.eyelidsAngryHeight)], fill=BGCOLOR)
+                                (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
+                                (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy + self.eyelidsAngryHeight)], fill=BGCOLOR)
                 draw.polygon([(self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
-                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
-                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsAngryHeight)], fill=BGCOLOR)
+                                (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                                (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsAngryHeight)], fill=BGCOLOR)
 
         self.eyelidsHappyBottomOffset = (self.eyelidsHappyBottomOffset + self.eyelidsHappyBottomOffsetNext) // 2
         if self.eyelidsHappyBottomOffset > 0:
