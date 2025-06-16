@@ -1,324 +1,487 @@
 import time
-import numpy as np
-from luma.core.interface.serial import spi
-from luma.core.render import canvas
-from luma.oled.device import ssd1306, sh1106
-from PIL import ImageDraw
 import random
-import signal
-import sys
-import RPi.GPIO as GPIO
+from luma.core.interface.serial import spi
+from luma.oled.device import ssd1306
+from PIL import ImageDraw, Image
 
 # --- Configuration for SPI ---
 SPI_BUS = 0
-SPI_DEVICE = 0
-DC_PIN = 23
-RST_PIN = 24
+SPI_DEVICE = 0  # CE0 (GPIO 8)
+DC_PIN = 23     # GPIO 23 (Physical Pin 16)
+RST_PIN = 24    # GPIO 24 (Physical Pin 18)
 
-# Initialize GPIO
-GPIO.setmode(GPIO.BCM)
-GPIO.setwarnings(False)
-
-def cleanup():
-    """Clean up GPIO and display resources"""
-    print("\nCleaning up resources...")
-    try:
-        if 'device' in globals():
-            with canvas(device) as draw:
-                draw.rectangle(device.bounding_box, outline="black", fill="black")
-            device.clear()
-            time.sleep(0.1)
-    except Exception as e:
-        print(f"Error during display cleanup: {e}")
-    
-    try:
-        GPIO.cleanup()
-    except Exception as e:
-        print(f"Error during GPIO cleanup: {e}")
-    print("Cleanup complete.")
-
-def signal_handler(sig, frame):
-    """Handle interrupt signals"""
-    cleanup()
-    sys.exit(0)
-
-# Register signal handlers
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
-
-# Initialize the OLED device
+# --- OLED Device Initialization ---
+oled_device = None
 try:
     serial = spi(port=SPI_BUS, device=SPI_DEVICE, gpio_DC=DC_PIN, gpio_RST=RST_PIN)
-    device = ssd1306(serial)
-    device.clear()
+    oled_device = ssd1306(serial, rotate=0)  # Added rotate=0 for proper orientation
+    print(f"OLED display initialized: {oled_device.width}x{oled_device.height}")
 except Exception as e:
     print(f"Error initializing OLED device: {e}")
-    cleanup()
-    sys.exit(1)
+    print("Please check wiring and luma.oled library installation.")
+    exit()
 
-# Calculate center for the single eye placement
-center_x = device.width // 2
-center_y = device.height // 2
+# --- Display Colors ---
+BGCOLOR = 0  # Black
+MAINCOLOR = 1  # White
 
-# Define eye parameters for the "hunter" anime eye style
-EYE_WIDTH = 40
-EYE_HEIGHT = 20
-PUPIL_SIZE = 10
-HIGHLIGHT_SIZE = 3
-SECONDARY_HIGHLIGHT_SIZE = 1
+# --- Mood Types ---
+DEFAULT = 0
+TIRED = 1
+ANGRY = 2
+HAPPY = 3
 
-# Eyelash parameters
-NUM_EYELASHES = 5
-EYELASH_LENGTH = 7
-EYELASH_THICKNESS = 1
-EYELASH_ANGLES = np.linspace(np.pi * 0.7, np.pi * 0.3, NUM_EYELASHES)
+# --- Predefined Positions ---
+N = 1  # North
+NE = 2
+E = 3
+SE = 4
+S = 5
+SW = 6
+W = 7
+NW = 8
 
-def draw_hunter_eye(draw, center_x_eye, center_y_eye, pupil_x_offset=0, pupil_y_offset=0,
-                    highlight_pos='top_left', eyelid_y_offset=0, is_happy_squint=False):
-    """Draws a single hunter-style anime eye with pupil, highlights, and eyelashes."""
-    eye_bbox = [center_x_eye - EYE_WIDTH, center_y_eye - EYE_HEIGHT + eyelid_y_offset,
-                center_x_eye + EYE_WIDTH, center_y_eye + EYE_HEIGHT + eyelid_y_offset]
+class RoboEyes:
+    def __init__(self, display_device):
+        self.device = display_device
+        self.screenWidth = self.device.width
+        self.screenHeight = self.device.height
+        self.frameInterval = 20  # 50 FPS default
+        self.fpsTimer = 0
+        
+        # Eye state variables
+        self.tired = self.angry = self.happy = False
+        self.curious = self.cyclops = False
+        self.eyeL_open = self.eyeR_open = False
+        
+        # Left eye geometry
+        self.eyeLwidthDefault = self.eyeLwidthCurrent = self.eyeLwidthNext = 36
+        self.eyeLheightDefault = 36
+        self.eyeLheightCurrent = 1  # Start closed
+        self.eyeLheightNext = self.eyeLheightDefault
+        self.eyeLheightOffset = 0
+        self.eyeLborderRadiusDefault = self.eyeLborderRadiusCurrent = self.eyeLborderRadiusNext = 8
+        
+        # Right eye geometry
+        self.eyeRwidthDefault = self.eyeRwidthCurrent = self.eyeRwidthNext = 36
+        self.eyeRheightDefault = 36
+        self.eyeRheightCurrent = 1  # Start closed
+        self.eyeRheightNext = self.eyeRheightDefault
+        self.eyeRheightOffset = 0
+        self.eyeRborderRadiusDefault = self.eyeRborderRadiusCurrent = self.eyeRborderRadiusNext = 8
+        
+        # Eye positions
+        self.spaceBetweenDefault = 10
+        self.eyeLxDefault = ((self.screenWidth) - (36 + 10 + 36)) // 2
+        self.eyeLyDefault = (self.screenHeight - 36) // 2
+        self.eyeLx = self.eyeLxNext = self.eyeLxDefault
+        self.eyeLy = self.eyeLyNext = self.eyeLyDefault
+        self.eyeRxDefault = self.eyeLx + 36 + 10
+        self.eyeRyDefault = self.eyeLy
+        self.eyeRx = self.eyeRxNext = self.eyeRxDefault
+        self.eyeRy = self.eyeRyNext = self.eyeRyDefault
+        
+        # Eyelids
+        self.eyelidsHeightMax = 18
+        self.eyelidsTiredHeight = self.eyelidsTiredHeightNext = 0
+        self.eyelidsAngryHeight = self.eyelidsAngryHeightNext = 0
+        self.eyelidsHappyBottomOffsetMax = 21
+        self.eyelidsHappyBottomOffset = self.eyelidsHappyBottomOffsetNext = 0
+        self.spaceBetweenCurrent = self.spaceBetweenNext = 10
+        
+        # Animation controls
+        self.hFlicker = self.vFlicker = False
+        self.hFlickerAlternate = self.vFlickerAlternate = False
+        self.hFlickerAmplitude = 2
+        self.vFlickerAmplitude = 10
+        
+        self.autoblinker = False
+        self.blinkInterval = 1
+        self.blinkIntervalVariation = 4
+        self.blinktimer = 0
+        
+        self.idle = False
+        self.idleInterval = 1
+        self.idleIntervalVariation = 3
+        self.idleAnimationTimer = 0
+        
+        self.confused = False
+        self.confusedAnimationTimer = 0
+        self.confusedAnimationDuration = 500
+        self.confusedToggle = True
+        
+        self.laugh = False
+        self.laughAnimationTimer = 0
+        self.laughAnimationDuration = 500
+        self.laughToggle = True
 
-    draw.ellipse(eye_bbox, outline="white", fill="black")
-    draw.line((eye_bbox[0], eye_bbox[1] + 2, eye_bbox[2], eye_bbox[1] + 2), fill="white")
-    
-    if not is_happy_squint:
-        draw.line((eye_bbox[0], eye_bbox[3] - 2, eye_bbox[2], eye_bbox[3] - 2), fill="white")
-    else:
-        draw.arc((eye_bbox[0], eye_bbox[3] - EYE_HEIGHT // 2, eye_bbox[2], eye_bbox[3]),
-                 start=0, end=180, fill="white", width=1)
+    def begin(self, width, height, frameRate):
+        """Initialize display with given dimensions and framerate."""
+        self.screenWidth = width
+        self.screenHeight = height
+        
+        # Clear display with blank image
+        blank = Image.new('1', (width, height), BGCOLOR)
+        self.device.display(blank)
+        
+        self.eyeLheightCurrent = 1  # Start with closed eyes
+        self.eyeRheightCurrent = 1
+        self.setFramerate(frameRate)
+        
+        # Recalculate positions
+        self.eyeLxDefault = ((width) - (36 + 10 + 36)) // 2
+        self.eyeLyDefault = (height - 36) // 2
+        self.eyeLx = self.eyeLxNext = self.eyeLxDefault
+        self.eyeLy = self.eyeLyNext = self.eyeLyDefault
+        self.eyeRxDefault = self.eyeLx + 36 + 10
+        self.eyeRyDefault = self.eyeLy
+        self.eyeRx = self.eyeRxNext = self.eyeRxDefault
+        self.eyeRy = self.eyeRyNext = self.eyeRyDefault
 
-    # Draw eyelashes
-    for i, angle in enumerate(EYELASH_ANGLES):
-        lx = center_x_eye + (EYE_WIDTH * np.cos(angle * 1.05 - np.pi/2))
-        ly = (center_y_eye - EYE_HEIGHT + eyelid_y_offset) + (EYE_HEIGHT * 0.2 * (1 - np.sin(angle - np.pi/2)))
-        ex = lx + EYELASH_LENGTH * np.cos(angle)
-        ey = ly - EYELASH_LENGTH * np.sin(angle)
-        draw.line((lx, ly, ex, ey), fill="white", width=EYELASH_THICKNESS)
+    def update(self):
+        """Update display at configured framerate."""
+        current_time_ms = time.monotonic_ns() // 1_000_000
+        if current_time_ms - self.fpsTimer >= self.frameInterval:
+            self.drawEyes()
+            self.fpsTimer = current_time_ms
 
-    pupil_center_x = center_x_eye + pupil_x_offset
-    pupil_center_y = center_y_eye + pupil_y_offset
-    
-    draw.ellipse(
-        (pupil_center_x - PUPIL_SIZE, pupil_center_y - PUPIL_SIZE,
-         pupil_center_x + PUPIL_SIZE, pupil_center_y + PUPIL_SIZE),
-        outline="white", fill="white"
-    )
+    # --- Setters ---
+    def setFramerate(self, fps):
+        self.frameInterval = 1000 // max(1, fps)  # Prevent division by zero
 
-    # Highlight positions
-    main_highlight_x = pupil_center_x
-    main_highlight_y = pupil_center_y
-    secondary_highlight_x = pupil_center_x
-    secondary_highlight_y = pupil_center_y
+    def setWidth(self, leftEye, rightEye):
+        self.eyeLwidthNext = self.eyeLwidthDefault = leftEye
+        self.eyeRwidthNext = self.eyeRwidthDefault = rightEye
 
-    if highlight_pos == 'top_left':
-        main_highlight_x -= PUPIL_SIZE // 2
-        main_highlight_y -= PUPIL_SIZE // 2
-        secondary_highlight_x += PUPIL_SIZE // 3
-        secondary_highlight_y -= PUPIL_SIZE // 3
-    elif highlight_pos == 'top_right':
-        main_highlight_x += PUPIL_SIZE // 2 - HIGHLIGHT_SIZE
-        main_highlight_y -= PUPIL_SIZE // 2
-        secondary_highlight_x -= PUPIL_SIZE // 3
-        secondary_highlight_y -= PUPIL_SIZE // 3
-    elif highlight_pos == 'bottom_left':
-        main_highlight_x -= PUPIL_SIZE // 2
-        main_highlight_y += PUPIL_SIZE // 2 - HIGHLIGHT_SIZE
-        secondary_highlight_x += PUPIL_SIZE // 3
-        secondary_highlight_y += PUPIL_SIZE // 3
-    elif highlight_pos == 'bottom_right':
-        main_highlight_x += PUPIL_SIZE // 2 - HIGHLIGHT_SIZE
-        main_highlight_y += PUPIL_SIZE // 2 - HIGHLIGHT_SIZE
-        secondary_highlight_x -= PUPIL_SIZE // 3
-        secondary_highlight_y += PUPIL_SIZE // 3
-    elif highlight_pos == 'center':
-        main_highlight_x -= HIGHLIGHT_SIZE // 2
-        main_highlight_y -= HIGHLIGHT_SIZE // 2
-        secondary_highlight_x -= SECONDARY_HIGHLIGHT_SIZE // 2
-        secondary_highlight_y -= SECONDARY_HIGHLIGHT_SIZE // 2 + PUPIL_SIZE // 2
-    
-    draw.ellipse(
-        (main_highlight_x, main_highlight_y,
-         main_highlight_x + HIGHLIGHT_SIZE, main_highlight_y + HIGHLIGHT_SIZE),
-        fill="black"
-    )
-    draw.ellipse(
-        (secondary_highlight_x, secondary_highlight_y,
-         secondary_highlight_x + SECONDARY_HIGHLIGHT_SIZE, secondary_highlight_y + SECONDARY_HIGHLIGHT_SIZE),
-        fill="black"
-    )
+    def setHeight(self, leftEye, rightEye):
+        self.eyeLheightNext = self.eyeLheightDefault = leftEye
+        self.eyeRheightNext = self.eyeRheightDefault = rightEye
 
-def draw_closed_eye(draw, center_x_eye, center_y_eye):
-    """Draws a closed eye as a simple horizontal line with slight curve."""
-    draw.arc(
-        (center_x_eye - EYE_WIDTH, center_y_eye - EYE_HEIGHT // 4,
-         center_x_eye + EYE_WIDTH, center_y_eye + EYE_HEIGHT // 4),
-        start=180, end=360, fill="white", width=2
-    )
+    def setBorderradius(self, leftEye, rightEye):
+        self.eyeLborderRadiusNext = self.eyeLborderRadiusDefault = leftEye
+        self.eyeRborderRadiusNext = self.eyeRborderRadiusDefault = rightEye
 
-def animate_happy():
-    """Animates a happy expression: eye squints slightly, pupil moves up."""
-    steps = 5
-    for i in range(steps):
-        with canvas(device) as draw:
-            eyelid_offset = int(EYE_HEIGHT * 0.08 * (i / steps))
-            pupil_offset_y = int(-PUPIL_SIZE * 0.4 * (i / steps))
-            draw_hunter_eye(draw, center_x, center_y,
-                          pupil_y_offset=pupil_offset_y,
-                          eyelid_y_offset=eyelid_offset,
-                          is_happy_squint=True, highlight_pos='top_left')
-        time.sleep(0.08)
+    def setSpacebetween(self, space):
+        self.spaceBetweenNext = self.spaceBetweenDefault = space
 
-    with canvas(device) as draw:
-        draw_hunter_eye(draw, center_x, center_y, pupil_y_offset=int(-PUPIL_SIZE * 0.4),
-                      eyelid_y_offset=int(EYE_HEIGHT * 0.08), is_happy_squint=True, highlight_pos='top_left')
-    time.sleep(np.random.uniform(1.0, 2.0))
+    def setMood(self, mood):
+        self.tired = self.angry = self.happy = False
+        if mood == TIRED: self.tired = True
+        elif mood == ANGRY: self.angry = True
+        elif mood == HAPPY: self.happy = True
 
-    for i in range(steps - 1, -1, -1):
-        with canvas(device) as draw:
-            eyelid_offset = int(EYE_HEIGHT * 0.08 * (i / steps))
-            pupil_offset_y = int(-PUPIL_SIZE * 0.4 * (i / steps))
-            draw_hunter_eye(draw, center_x, center_y,
-                          pupil_y_offset=pupil_offset_y,
-                          eyelid_y_offset=eyelid_offset,
-                          is_happy_squint=True, highlight_pos='top_left')
-        time.sleep(0.08)
-    time.sleep(0.3)
+    def setPosition(self, position):
+        if position == N:
+            self.eyeLxNext, self.eyeLyNext = self.getScreenConstraint_X() // 2, 0
+        elif position == NE:
+            self.eyeLxNext, self.eyeLyNext = self.getScreenConstraint_X(), 0
+        elif position == E:
+            self.eyeLxNext, self.eyeLyNext = self.getScreenConstraint_X(), self.getScreenConstraint_Y() // 2
+        elif position == SE:
+            self.eyeLxNext, self.eyeLyNext = self.getScreenConstraint_X(), self.getScreenConstraint_Y()
+        elif position == S:
+            self.eyeLxNext, self.eyeLyNext = self.getScreenConstraint_X() // 2, self.getScreenConstraint_Y()
+        elif position == SW:
+            self.eyeLxNext, self.eyeLyNext = 0, self.getScreenConstraint_Y()
+        elif position == W:
+            self.eyeLxNext, self.eyeLyNext = 0, self.getScreenConstraint_Y() // 2
+        elif position == NW:
+            self.eyeLxNext, self.eyeLyNext = 0, 0
+        else:  # DEFAULT
+            self.eyeLxNext, self.eyeLyNext = self.getScreenConstraint_X() // 2, self.getScreenConstraint_Y() // 2
 
-def animate_joy():
-    """Animates a joyful expression: more exaggerated squint, rapid pupil movement, and highlight flicker."""
-    steps = 7
-    for i in range(steps):
-        with canvas(device) as draw:
-            eyelid_offset = int(EYE_HEIGHT * 0.15 * (i / steps))
-            pupil_offset_y = int(-PUPIL_SIZE * 0.6 * (i / steps))
-            current_highlight_pos = random.choice(['top_left', 'top_right', 'bottom_left', 'bottom_right'])
-            draw_hunter_eye(draw, center_x, center_y,
-                          pupil_y_offset=pupil_offset_y,
-                          eyelid_y_offset=eyelid_offset,
-                          is_happy_squint=True, highlight_pos=current_highlight_pos)
-        time.sleep(0.05)
+    def setAutoblinker(self, active, interval=1, variation=0):
+        self.autoblinker = active
+        self.blinkInterval = interval
+        self.blinkIntervalVariation = variation
+        if active:
+            self.blinktimer = (time.monotonic_ns() // 1_000_000 + 
+                             (interval * 1000) + 
+                             (random.randint(0, variation) * 1000))
 
-    hold_duration = np.random.uniform(1.0, 2.0)
-    start_time = time.time()
-    while time.time() - start_time < hold_duration:
-        with canvas(device) as draw:
-            pupil_jitter_x = random.randint(-1, 1)
-            pupil_jitter_y = random.randint(-1, 1)
-            current_highlight_pos = random.choice(['top_left', 'top_right', 'bottom_left', 'bottom_right'])
-            draw_hunter_eye(draw, center_x, center_y,
-                          pupil_y_offset=int(-PUPIL_SIZE * 0.6) + pupil_jitter_y,
-                          pupil_x_offset=pupil_jitter_x,
-                          eyelid_y_offset=int(EYE_HEIGHT * 0.15),
-                          is_happy_squint=True, highlight_pos=current_highlight_pos)
-        time.sleep(0.07)
+    def setIdleMode(self, active, interval=1, variation=0):
+        self.idle = active
+        self.idleInterval = interval
+        self.idleIntervalVariation = variation
+        if active:
+            self.idleAnimationTimer = (time.monotonic_ns() // 1_000_000 + 
+                                      (interval * 1000) + 
+                                      (random.randint(0, variation) * 1000))
 
-    for i in range(steps - 1, -1, -1):
-        with canvas(device) as draw:
-            eyelid_offset = int(EYE_HEIGHT * 0.15 * (i / steps))
-            pupil_offset_y = int(-PUPIL_SIZE * 0.6 * (i / steps))
-            draw_hunter_eye(draw, center_x, center_y,
-                          pupil_y_offset=pupil_offset_y,
-                          eyelid_y_offset=eyelid_offset,
-                          is_happy_squint=True, highlight_pos='top_left')
-        time.sleep(0.05)
-    time.sleep(0.3)
+    def setCuriosity(self, curiousBit):
+        self.curious = curiousBit
 
-def animate_eyes_main_loop():
-    """Main animation loop that cycles through various eye movements and emotional states."""
-    eye_states = [
-        'normal_straight', 'normal_left', 'normal_right', 'normal_up', 'normal_down',
-        'blink', 'happy', 'joy', 'sad', 'surprised', 'wink', 'sleepy'
-    ]
+    def setCyclops(self, cyclopsBit):
+        self.cyclops = cyclopsBit
 
-    while True:
-        state = random.choice(eye_states)
-        highlight_choice = random.choice(['top_left', 'top_right', 'bottom_left', 'bottom_right', 'center'])
+    def setHFlicker(self, flickerBit, amplitude=2):
+        self.hFlicker = flickerBit
+        self.hFlickerAmplitude = amplitude
 
-        if state == 'happy':
-            animate_happy()
-        elif state == 'joy':
-            animate_joy()
-        elif state == 'blink':
-            for _ in range(1):
-                with canvas(device) as draw_blink:
-                    draw_closed_eye(draw_blink, center_x, center_y)
-                time.sleep(0.1)
-                with canvas(device) as draw_open:
-                    draw_hunter_eye(draw_open, center_x, center_y, highlight_pos=highlight_choice)
-                time.sleep(0.1)
-            time.sleep(np.random.uniform(0.5, 1.0))
+    def setVFlicker(self, flickerBit, amplitude=10):
+        self.vFlicker = flickerBit
+        self.vFlickerAmplitude = amplitude
+
+    # --- Getters ---
+    def getScreenConstraint_X(self):
+        return self.screenWidth - self.eyeLwidthCurrent - self.spaceBetweenCurrent - self.eyeRwidthCurrent
+
+    def getScreenConstraint_Y(self):
+        return self.screenHeight - self.eyeLheightDefault
+
+    # --- Eye Control ---
+    def close(self, left=True, right=True):
+        if left:
+            self.eyeLheightNext = 1
+            self.eyeL_open = False
+        if right:
+            self.eyeRheightNext = 1
+            self.eyeR_open = False
+
+    def open(self, left=True, right=True):
+        if left:
+            self.eyeL_open = True
+            self.eyeLheightNext = self.eyeLheightDefault
+        if right:
+            self.eyeR_open = True
+            self.eyeRheightNext = self.eyeRheightDefault
+
+    def blink(self, left=True, right=True):
+        self.close(left, right)
+
+    # --- Animations ---
+    def anim_confused(self):
+        self.confused = True
+        self.confusedToggle = True
+
+    def anim_laugh(self):
+        self.laugh = True
+        self.laughToggle = True
+
+    def drawEyes(self):
+        current_time_ms = time.monotonic_ns() // 1_000_000
+
+        # --- Pre-calculations ---
+        # Handle curious gaze
+        if self.curious:
+            self.eyeLheightOffset = 8 if (self.eyeLxNext <= 10 or 
+                (self.cyclops and self.eyeLxNext >= (self.getScreenConstraint_X() - 10))) else 0
+            self.eyeRheightOffset = 8 if self.eyeRxNext >= self.screenWidth - self.eyeRwidthCurrent - 10 else 0
         else:
-            with canvas(device) as draw:
-                if state == 'normal_straight':
-                    draw_hunter_eye(draw, center_x, center_y, highlight_pos=highlight_choice)
-                    time.sleep(np.random.uniform(1.0, 3.0))
-                elif state == 'normal_left':
-                    draw_hunter_eye(draw, center_x, center_y, pupil_x_offset=-PUPIL_SIZE, highlight_pos=highlight_choice)
-                    time.sleep(np.random.uniform(0.5, 1.5))
-                elif state == 'normal_right':
-                    draw_hunter_eye(draw, center_x, center_y, pupil_x_offset=PUPIL_SIZE, highlight_pos=highlight_choice)
-                    time.sleep(np.random.uniform(0.5, 1.5))
-                elif state == 'normal_up':
-                    draw_hunter_eye(draw, center_x, center_y, pupil_y_offset=-PUPIL_SIZE, highlight_pos=highlight_choice)
-                    time.sleep(np.random.uniform(0.5, 1.5))
-                elif state == 'normal_down':
-                    draw_hunter_eye(draw, center_x, center_y, pupil_y_offset=PUPIL_SIZE, highlight_pos=highlight_choice)
-                    time.sleep(np.random.uniform(0.5, 1.5))
-                elif state == 'sad':
-                    draw_hunter_eye(draw, center_x, center_y, pupil_y_offset=PUPIL_SIZE // 2, highlight_pos='center')
-                    time.sleep(np.random.uniform(1.0, 2.5))
-                elif state == 'surprised':
-                    temp_eye_height = EYE_HEIGHT + 10
-                    temp_pupil_size = PUPIL_SIZE // 2
-                    draw.ellipse(
-                        (center_x - EYE_WIDTH, center_y - temp_eye_height,
-                         center_x + EYE_WIDTH, center_y + temp_eye_height),
-                        outline="white", fill="black"
-                    )
-                    draw.ellipse(
-                        (center_x - temp_pupil_size, center_y - temp_pupil_size,
-                         center_x + temp_pupil_size, center_y + temp_pupil_size),
-                        outline="white", fill="white"
-                    )
-                    draw.ellipse(
-                        (center_x - HIGHLIGHT_SIZE//2, center_y - HIGHLIGHT_SIZE//2,
-                         center_x + HIGHLIGHT_SIZE//2, center_y + HIGHLIGHT_SIZE//2),
-                        fill="black"
-                    )
-                    time.sleep(np.random.uniform(0.7, 1.5))
-                    with canvas(device) as draw_norm:
-                        draw_hunter_eye(draw_norm, center_x, center_y, highlight_pos=highlight_choice)
-                    time.sleep(0.5)
-                elif state == 'wink':
-                    draw_closed_eye(draw, center_x, center_y)
-                    time.sleep(0.3)
-                    with canvas(device) as draw_open:
-                        draw_hunter_eye(draw_open, center_x, center_y, highlight_pos=highlight_choice)
-                    time.sleep(0.3)
-                elif state == 'sleepy':
-                    draw.ellipse(
-                        (center_x - EYE_WIDTH, center_y - EYE_HEIGHT // 3,
-                         center_x + EYE_WIDTH, center_y + EYE_HEIGHT // 3),
-                        outline="white", fill="black"
-                    )
-                    draw.ellipse(
-                        (center_x - PUPIL_SIZE // 2, center_y + PUPIL_SIZE // 2,
-                         center_x + PUPIL_SIZE // 2, center_y + PUPIL_SIZE + HIGHLIGHT_SIZE),
-                        outline="white", fill="white"
-                    )
-                    time.sleep(np.random.uniform(1.5, 3.0))
+            self.eyeLheightOffset = self.eyeRheightOffset = 0
 
-# --- Main execution block ---
-try:
-    if 'device' in locals() and device:
-        device.clear()
-        print("Starting single hunter anime eye animation...")
-        animate_eyes_main_loop()  # Fixed the function name here
+        # Tween eye heights
+        self.eyeLheightCurrent = (self.eyeLheightCurrent + self.eyeLheightNext + self.eyeLheightOffset) // 2
+        self.eyeLy += (self.eyeLheightDefault - self.eyeLheightCurrent) // 2 - self.eyeLheightOffset // 2
+        
+        self.eyeRheightCurrent = (self.eyeRheightCurrent + self.eyeRheightNext + self.eyeRheightOffset) // 2
+        self.eyeRy += (self.eyeRheightDefault - self.eyeRheightCurrent) // 2 - self.eyeRheightOffset // 2
 
-except KeyboardInterrupt:
-    print("\nKeyboardInterrupt detected.")
-except Exception as e:
-    print(f"\nAn unexpected error occurred: {e}")
-finally:
-    cleanup()
+        # Handle eye opening
+        if self.eyeL_open and self.eyeLheightCurrent <= 1 + self.eyeLheightOffset:
+            self.eyeLheightNext = self.eyeLheightDefault
+        if self.eyeR_open and self.eyeRheightCurrent <= 1 + self.eyeRheightOffset:
+            self.eyeRheightNext = self.eyeRheightDefault
+
+        # Tween other properties
+        self.eyeLwidthCurrent = (self.eyeLwidthCurrent + self.eyeLwidthNext) // 2
+        self.eyeRwidthCurrent = (self.eyeRwidthCurrent + self.eyeRwidthNext) // 2
+        self.spaceBetweenCurrent = (self.spaceBetweenCurrent + self.spaceBetweenNext) // 2
+        
+        self.eyeLx = (self.eyeLx + self.eyeLxNext) // 2
+        self.eyeLy = (self.eyeLy + self.eyeLyNext) // 2
+        
+        self.eyeRxNext = self.eyeLxNext + self.eyeLwidthCurrent + self.spaceBetweenCurrent
+        self.eyeRyNext = self.eyeLyNext
+        self.eyeRx = (self.eyeRx + self.eyeRxNext) // 2
+        self.eyeRy = (self.eyeRy + self.eyeRyNext) // 2
+        
+        self.eyeLborderRadiusCurrent = (self.eyeLborderRadiusCurrent + self.eyeLborderRadiusNext) // 2
+        self.eyeRborderRadiusCurrent = (self.eyeRborderRadiusCurrent + self.eyeRborderRadiusNext) // 2
+
+        # --- Handle animations ---
+        if self.autoblinker and current_time_ms >= self.blinktimer:
+            self.blink()
+            self.blinktimer = (current_time_ms + 
+                              (self.blinkInterval * 1000) + 
+                              (random.randint(0, self.blinkIntervalVariation) * 1000)
+
+        if self.laugh:
+            if self.laughToggle:
+                self.setVFlicker(True, 5)
+                self.laughAnimationTimer = current_time_ms
+                self.laughToggle = False
+            elif current_time_ms >= self.laughAnimationTimer + self.laughAnimationDuration:
+                self.setVFlicker(False)
+                self.laugh = False
+
+        if self.confused:
+            if self.confusedToggle:
+                self.setHFlicker(True, 20)
+                self.confusedAnimationTimer = current_time_ms
+                self.confusedToggle = False
+            elif current_time_ms >= self.confusedAnimationTimer + self.confusedAnimationDuration:
+                self.setHFlicker(False)
+                self.confused = False
+
+        if self.idle and current_time_ms >= self.idleAnimationTimer:
+            self.eyeLxNext = random.randint(0, self.getScreenConstraint_X())
+            self.eyeLyNext = random.randint(0, self.getScreenConstraint_Y())
+            self.idleAnimationTimer = (current_time_ms + 
+                                      (self.idleInterval * 1000) + 
+                                      (random.randint(0, self.idleIntervalVariation) * 1000)
+
+        # Apply flicker effects
+        if self.hFlicker:
+            offset = self.hFlickerAmplitude * (1 if self.hFlickerAlternate else -1)
+            self.eyeLx += offset
+            self.eyeRx += offset
+            self.hFlickerAlternate = not self.hFlickerAlternate
+
+        if self.vFlicker:
+            offset = self.vFlickerAmplitude * (1 if self.vFlickerAlternate else -1)
+            self.eyeLy += offset
+            self.eyeRy += offset
+            self.vFlickerAlternate = not self.vFlickerAlternate
+
+        # Handle cyclops mode
+        if self.cyclops:
+            self.eyeRwidthCurrent = self.eyeRheightCurrent = self.spaceBetweenCurrent = 0
+
+        # --- Drawing ---
+        image = Image.new('1', (self.screenWidth, self.screenHeight))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, self.screenWidth, self.screenHeight), fill=BGCOLOR)
+
+        # Draw eyes
+        draw.rounded_rectangle(
+            (self.eyeLx, self.eyeLy, 
+             self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyeLheightCurrent),
+            radius=self.eyeLborderRadiusCurrent,
+            fill=MAINCOLOR
+        )
+
+        if not self.cyclops:
+            draw.rounded_rectangle(
+                (self.eyeRx, self.eyeRy,
+                 self.eyeRx + self.eyeRwidthCurrent, self.eyeRy + self.eyeRheightCurrent),
+                radius=self.eyeRborderRadiusCurrent,
+                fill=MAINCOLOR
+            )
+
+        # Handle mood expressions
+        if self.tired:
+            self.eyelidsTiredHeightNext = self.eyeLheightCurrent // 2
+            self.eyelidsAngryHeightNext = 0
+        else:
+            self.eyelidsTiredHeightNext = 0
+
+        if self.angry:
+            self.eyelidsAngryHeightNext = self.eyeLheightCurrent // 2
+            self.eyelidsTiredHeightNext = 0
+        else:
+            self.eyelidsAngryHeightNext = 0
+
+        if self.happy:
+            self.eyelidsHappyBottomOffsetNext = self.eyeLheightCurrent // 2
+        else:
+            self.eyelidsHappyBottomOffsetNext = 0
+
+        # Draw eyelids
+        self.eyelidsTiredHeight = (self.eyelidsTiredHeight + self.eyelidsTiredHeightNext) // 2
+        if self.eyelidsTiredHeight > 0:
+            if not self.cyclops:
+                draw.polygon([(self.eyeLx, self.eyeLy), 
+                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                            (self.eyeLx, self.eyeLy + self.eyelidsTiredHeight)], fill=BGCOLOR)
+                draw.polygon([(self.eyeRx, self.eyeRy),
+                            (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy),
+                            (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy + self.eyelidsTiredHeight)], fill=BGCOLOR)
+            else:
+                draw.polygon([(self.eyeLx, self.eyeLy),
+                            (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
+                            (self.eyeLx, self.eyeLy + self.eyelidsTiredHeight)], fill=BGCOLOR)
+                draw.polygon([(self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
+                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsTiredHeight)], fill=BGCOLOR)
+
+        self.eyelidsAngryHeight = (self.eyelidsAngryHeight + self.eyelidsAngryHeightNext) // 2
+        if self.eyelidsAngryHeight > 0:
+            if not self.cyclops:
+                draw.polygon([(self.eyeLx, self.eyeLy),
+                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsAngryHeight)], fill=BGCOLOR)
+                draw.polygon([(self.eyeRx, self.eyeRy),
+                            (self.eyeRx + self.eyeRwidthCurrent, self.eyeRy),
+                            (self.eyeRx, self.eyeRy + self.eyelidsAngryHeight)], fill=BGCOLOR)
+            else:
+                draw.polygon([(self.eyeLx, self.eyeLy),
+                            (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
+                            (self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy + self.eyelidsAngryHeight)], fill=BGCOLOR)
+                draw.polygon([(self.eyeLx + (self.eyeLwidthCurrent // 2), self.eyeLy),
+                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy),
+                            (self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyelidsAngryHeight)], fill=BGCOLOR)
+
+        self.eyelidsHappyBottomOffset = (self.eyelidsHappyBottomOffset + self.eyelidsHappyBottomOffsetNext) // 2
+        if self.eyelidsHappyBottomOffset > 0:
+            draw.rounded_rectangle(
+                (self.eyeLx - 1, (self.eyeLy + self.eyeLheightCurrent) - self.eyelidsHappyBottomOffset + 1,
+                 self.eyeLx + self.eyeLwidthCurrent + 2, self.eyeLy + self.eyeLheightCurrent + self.eyeLheightDefault),
+                radius=self.eyeLborderRadiusCurrent,
+                fill=BGCOLOR
+            )
+            if not self.cyclops:
+                draw.rounded_rectangle(
+                    (self.eyeRx - 1, (self.eyeRy + self.eyeRheightCurrent) - self.eyelidsHappyBottomOffset + 1,
+                     self.eyeRx + self.eyeRwidthCurrent + 2, self.eyeRy + self.eyeRheightCurrent + self.eyeRheightDefault),
+                    radius=self.eyeRborderRadiusCurrent,
+                    fill=BGCOLOR
+                )
+
+        # Display the final image
+        self.device.display(image)
+
+# --- Main Program ---
+if oled_device:
+    try:
+        eyes = RoboEyes(oled_device)
+        eyes.begin(oled_device.width, oled_device.height, 50)
+        
+        print("RoboEyes animation running...")
+        eyes.setIdleMode(True, 2, 3)
+        eyes.setAutoblinker(True, 1, 4)
+        eyes.setCuriosity(True)
+        
+        mood_timer = time.monotonic_ns() // 1_000_000
+        current_mood_idx = 0
+        moods = [DEFAULT, HAPPY, ANGRY, TIRED]
+        mood_names = ["DEFAULT", "HAPPY", "ANGRY", "TIRED"]
+        
+        while True:
+            eyes.update()
+            
+            # Rotate moods every 5 seconds
+            current_time = time.monotonic_ns() // 1_000_000
+            if current_time - mood_timer >= 5000:
+                current_mood_idx = (current_mood_idx + 1) % len(moods)
+                eyes.setMood(moods[current_mood_idx])
+                mood_timer = current_time
+                print(f"Mood changed to: {mood_names[current_mood_idx]}")
+            
+            # Random animations
+            if random.random() < 0.01:
+                eyes.anim_confused()
+                print("Confused animation triggered!")
+            if random.random() < 0.01:
+                eyes.anim_laugh()
+                print("Laugh animation triggered!")
+                
+    except KeyboardInterrupt:
+        print("\nExiting gracefully...")
+    finally:
+        # Clear display on exit
+        blank = Image.new('1', (oled_device.width, oled_device.height), BGCOLOR)
+        oled_device.display(blank)
+        print("Display cleared. Goodbye!")
+else:
+    print("OLED initialization failed. Cannot run animation.")
