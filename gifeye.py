@@ -2,10 +2,10 @@ import time
 import numpy as np # For random functions and sometimes better randoms
 import random # For basic random functions
 
+# Removed: from luma.core.render import canvas # No longer used
 from luma.core.interface.serial import spi
-from luma.core.render import canvas # Still imported but will be used differently
 from luma.oled.device import ssd1306, sh1106 # Or just ssd1306 if you know your chip
-from PIL import ImageDraw, Image # Import Image for explicit image creation
+from PIL import ImageDraw, Image # Ensure Image is imported for explicit image creation
 
 # --- Configuration for SPI ---
 # SPI uses a bus (0 or 1) and device (0 or 1, for CS0 or CS1)
@@ -432,16 +432,9 @@ class RoboEyes:
         if self.eyeL_open:
             if self.eyeLheightCurrent <= 1 + self.eyeLheightOffset:
                 self.eyeLheightNext = self.eyeLheightDefault
-            # This 'else' clause should only execute if the eye is already fully open and the flag needs resetting.
-            # However, the blink() method sets eyeL_open=True, and it should become False only when eyeLheightCurrent reaches default.
-            # The current logic will keep eyeL_open true, and eyeLheightNext will keep being set to default if current is <= 1.
-            # Let's refine this: only set eyeL_open to False once it has *fully* opened.
-            # For this simple tweening, it's fine as long as eyeLheightNext is consistently set.
-
         if self.eyeR_open:
             if self.eyeRheightCurrent <= 1 + self.eyeRheightOffset:
                 self.eyeRheightNext = self.eyeRheightDefault
-            # See comment above for eyeL_open
 
         # Left eye width tweening
         self.eyeLwidthCurrent = int((self.eyeLwidthCurrent + self.eyeLwidthNext) / 2)
@@ -530,23 +523,27 @@ class RoboEyes:
 
         #### ACTUAL DRAWINGS ####
 
-        # Explicitly create an Image and ImageDraw object for drawing.
-        # This replaces the 'with canvas(self.device) as draw:' block.
-        image = Image.new('1', (self.screenWidth, self.screenHeight)) # Create a blank 1-bit image
-        draw = ImageDraw.Draw(image) # Get a drawing object for this image
+        # Create a blank 1-bit PIL Image with the dimensions of the OLED display.
+        # This will serve as our drawing buffer for the current frame.
+        image = Image.new('1', (self.screenWidth, self.screenHeight))
+        # Get an ImageDraw object for the newly created image. All drawing commands
+        # will be applied to this 'draw' object, which modifies the 'image'.
+        draw = ImageDraw.Draw(image)
 
-        # Clear the image buffer with background color (ensures previous frame is wiped)
+        # Clear the entire image buffer with the background color (black, 0).
+        # This ensures that nothing from the previous frame remains visible.
         draw.rectangle((0, 0, self.screenWidth, self.screenHeight), fill=BGCOLOR)
 
-        # Draw basic eye rectangles
-        # Pillow's rounded_rectangle expects (x0, y0, x1, y1)
-        # x0,y0 = top-left; x1,y1 = bottom-right
+        # Draw basic eye rectangles (pupils)
+        # rounded_rectangle takes a bounding box (x0, y0, x1, y1), a radius, and a fill color.
+        # x0, y0 are the top-left coordinates; x1, y1 are the bottom-right coordinates.
         draw.rounded_rectangle(
             (self.eyeLx, self.eyeLy, self.eyeLx + self.eyeLwidthCurrent, self.eyeLy + self.eyeLheightCurrent),
             radius=self.eyeLborderRadiusCurrent,
             fill=MAINCOLOR
         )
 
+        # Draw the right eye only if cyclops mode is not active
         if not self.cyclops:
             draw.rounded_rectangle(
                 (self.eyeRx, self.eyeRy, self.eyeRx + self.eyeRwidthCurrent, self.eyeRy + self.eyeRheightCurrent),
@@ -554,7 +551,7 @@ class RoboEyes:
                 fill=MAINCOLOR
             )
 
-        # Prepare mood type transitions
+        # Prepare mood type transitions (logic remains the same)
         if self.tired:
             self.eyelidsTiredHeightNext = self.eyeLheightCurrent // 2
             self.eyelidsAngryHeightNext = 0
@@ -573,6 +570,7 @@ class RoboEyes:
             self.eyelidsHappyBottomOffsetNext = 0
 
         # Draw tired top eyelids (triangles for a pointed look)
+        # polygon takes a list of (x, y) tuples for its vertices and a fill color.
         self.eyelidsTiredHeight = int((self.eyelidsTiredHeight + self.eyelidsTiredHeightNext) / 2)
         if self.eyelidsTiredHeight > 0:
             if not self.cyclops:
@@ -649,7 +647,8 @@ class RoboEyes:
                     fill=BGCOLOR
                 )
 
-        # Finally, display the prepared image on the OLED device
+        # Finally, display the prepared image on the OLED device.
+        # This is the crucial step that sends the pixel data to the screen.
         self.device.display(image)
 
 
